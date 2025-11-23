@@ -19,7 +19,7 @@ PERSISTENCE = ".wiselist.json"
 
 # Definiamo dove si trova la card
 CARD_FILENAME = "wiselist-card.js"
-CARD_URL = "/wiselist/card.js"
+CARD_URL = "/wiselist/wiselist-card.js"
 
 CONFIG_SCHEMA = cv.empty_config_schema(DOMAIN)
 
