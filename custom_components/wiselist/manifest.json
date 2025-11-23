@@ -3,9 +3,10 @@
   "name": "WiseList",
   "codeowners": [],
   "config_flow": false,
-  "documentation": "https://github.com/image82/wiselist",
+  "documentation": "https://github.com/image82/ha-wiselist",
   "iot_class": "local_polling",
-  "issue_tracker": "https://github.com/image82/wiselist/issues",
+  "issue_tracker": "https://github.com/image82/ha-wiselist/issues",
   "requirements": [],
   "version": "1.0.0"
+
 }
