@@ -356,4 +356,5 @@ class WiseListCard extends HTMLElement {
     setConfig(config) { }
     getCardSize() { return 5; }
 }
+
 customElements.define('wiselist-card', WiseListCard);
