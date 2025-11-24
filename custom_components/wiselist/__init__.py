@@ -9,6 +9,8 @@ from homeassistant.helpers.typing import ConfigType
 from homeassistant.helpers import config_validation as cv
 from homeassistant.util import dt as dt_util
 from homeassistant.components.http import StaticPathConfig
+from homeassistant.components.lovelace import DOMAIN as LOVELACE_DOMAIN
+from homeassistant.components.lovelace.resources import ResourceStorageCollection
 
 from .api import async_setup_api
 
@@ -26,7 +28,7 @@ CONFIG_SCHEMA = cv.empty_config_schema(DOMAIN)
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Set up the WiseList component."""
     
-    # 1. Registra la risorsa statica per la Card (Magia HACS)
+    # 1. Registra il percorso statico (IL PONTE)
     component_path = hass.config.path(f"custom_components/{DOMAIN}")
     card_path = os.path.join(component_path, CARD_FILENAME)
     
@@ -34,6 +36,35 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         await hass.http.async_register_static_paths([
             StaticPathConfig(CARD_URL, card_path, False)
         ])
+        
+        # --- NUOVO: REGISTRAZIONE AUTOMATICA RISORSA (L'INVITO) ---
+        # Questo pezzo controlla se la risorsa esiste in Lovelace, e se no la aggiunge.
+        try:
+            # Ottieni il registro delle risorse di Lovelace
+            resources: ResourceStorageCollection = hass.data[LOVELACE_DOMAIN]["resources"]
+            
+            # Carica le risorse se non sono ancora caricate
+            if not resources.loaded:
+                await resources.async_load()
+                
+            # Controlla se l'URL esiste già
+            found = False
+            for item in resources.async_items():
+                if item["url"] == CARD_URL:
+                    found = True
+                    break
+            
+            # Se non esiste, crealo
+            if not found:
+                await resources.async_create_item({
+                    "res_type": "module",
+                    "url": CARD_URL,
+                })
+                _LOGGER.info("Risorsa WiseList aggiunta automaticamente a Lovelace")
+                
+        except Exception as e:
+            _LOGGER.warning(f"Impossibile registrare automaticamente la risorsa WiseList: {e}")
+        # ----------------------------------------------------------
     
     # 2. Setup Dati
     data = hass.data[DOMAIN] = WiseListData(hass)
