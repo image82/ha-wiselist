@@ -1,34 +1,33 @@
-"""Componente WiseList per Home Assistant."""
+"""Inizializzazione dell'integrazione WiseList."""
 import logging
-import uuid
-import json
 import os
-
-from homeassistant.core import HomeAssistant, ServiceCall
+import json
+import uuid
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.core import HomeAssistant
 from homeassistant.helpers.typing import ConfigType
-from homeassistant.helpers import config_validation as cv
-from homeassistant.util import dt as dt_util
+
 from homeassistant.components.http import StaticPathConfig
 from homeassistant.components.lovelace import DOMAIN as LOVELACE_DOMAIN
 from homeassistant.components.lovelace.resources import ResourceStorageCollection
+
+from .const import DOMAIN, CONF_LIST_NAME, TITLE
 
 from .api import async_setup_api
 
 _LOGGER = logging.getLogger(__name__)
 
-DOMAIN = "wiselist"
-PERSISTENCE = ".wiselist.json"
-
-# Definiamo dove si trova la card
 CARD_FILENAME = "wiselist-card.js"
-CARD_URL = "/wiselist/card.js"
+CARD_URL = f"/{DOMAIN}/card.js"
+LEGACY_PERSISTENCE = ".wiselist.json"
+PLATFORMS: list[str] = [] 
 
-CONFIG_SCHEMA = cv.empty_config_schema(DOMAIN)
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
-    """Set up the WiseList component."""
-    
-    # 1. Registra il percorso statico (IL PONTE)
+    """Configura l'integrazione WiseList."""
+    hass.data.setdefault(DOMAIN, {})
+
+    # Registra risorse (card.js)
     component_path = hass.config.path(f"custom_components/{DOMAIN}")
     card_path = os.path.join(component_path, CARD_FILENAME)
     
@@ -37,87 +36,81 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
             StaticPathConfig(CARD_URL, card_path, False)
         ])
         
-        # --- NUOVO: REGISTRAZIONE AUTOMATICA RISORSA (L'INVITO) ---
-        # Questo pezzo controlla se la risorsa esiste in Lovelace, e se no la aggiunge.
         try:
-            # Ottieni il registro delle risorse di Lovelace
-            resources: ResourceStorageCollection = hass.data[LOVELACE_DOMAIN]["resources"]
-            
-            # Carica le risorse se non sono ancora caricate
-            if not resources.loaded:
-                await resources.async_load()
-                
-            # Controlla se l'URL esiste già
-            found = False
-            for item in resources.async_items():
-                if item["url"] == CARD_URL:
-                    found = True
-                    break
-            
-            # Se non esiste, crealo
-            if not found:
-                await resources.async_create_item({
-                    "res_type": "module",
-                    "url": CARD_URL,
-                })
-                _LOGGER.info("Risorsa WiseList aggiunta automaticamente a Lovelace")
-                
+            if LOVELACE_DOMAIN in hass.data:
+                resources: ResourceStorageCollection = hass.data[LOVELACE_DOMAIN]["resources"]
+                if not resources.loaded:
+                    await resources.async_load()
+                found = any(item["url"] == CARD_URL for item in resources.async_items())
+                if not found:
+                    await resources.async_create_item({
+                        "res_type": "module",
+                        "url": CARD_URL,
+                    })
+                    _LOGGER.info("Risorsa WiseList aggiunta automaticamente a Lovelace")
         except Exception as e:
             _LOGGER.warning(f"Impossibile registrare automaticamente la risorsa WiseList: {e}")
-        # ----------------------------------------------------------
-    
-    # 2. Setup Dati
-    data = hass.data[DOMAIN] = WiseListData(hass)
-    await data.async_load()
-    data.fix_permissions()
-
-    # 3. Setup API
+            
     async_setup_api(hass)
+    return True
 
-    # 4. Registrazione Servizi
-    async def handle_add_item(call: ServiceCall):
-        name = call.data.get("name", "Oggetto Test")
-        await data.async_add(name)
 
-    async def handle_remove_item(call: ServiceCall):
-        name = call.data.get("name")
-        item = next((i for i in data.items if i["name"] == name), None)
-        if item:
-            await data.async_remove(item["id"])
+async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Configura l'istanza di WiseList da una Config Entry."""
+    list_name = entry.data.get(CONF_LIST_NAME)
+    entry_id = entry.entry_id
+    
+    filename = f".wiselist_{entry_id}.json"
+    new_db_path = hass.config.path(filename)
+    legacy_db_path = hass.config.path(LEGACY_PERSISTENCE)
 
-    async def handle_update_item(call: ServiceCall):
-        name = call.data.get("name")
-        complete = call.data.get("complete", True) 
-        item = next((i for i in data.items if i["name"] == name), None)
-        if item:
-            update_data = {"complete": complete}
-            if complete:
-                current_count = item.get("counter", 0)
-                update_data["counter"] = current_count + 1
-                update_data["last_updated"] = dt_util.now().isoformat()
-            await data.async_update(item["id"], update_data)
+    # Migrazione vecchio DB
+    if os.path.exists(legacy_db_path) and not os.path.exists(new_db_path):
+        try:
+            os.rename(legacy_db_path, new_db_path)
+            _LOGGER.info(f"MIGRAZIONE SUCCESSO: Il vecchio database è stato rinominato in {filename}")
+        except OSError as err:
+            _LOGGER.error(f"Errore durante la migrazione del database: {err}")
 
-    async def handle_clear_completed(call: ServiceCall):
-        await data.async_clear_completed()
+    data_instance = WiseListData(hass, filename)
+    await data_instance.async_load()
+    data_instance.fix_permissions()
 
-    # I servizi ora si chiamano wiselist.add_item, ecc.
-    hass.services.async_register(DOMAIN, "add_item", handle_add_item)
-    hass.services.async_register(DOMAIN, "remove_item", handle_remove_item)
-    hass.services.async_register(DOMAIN, "update_item_status", handle_update_item)
-    hass.services.async_register(DOMAIN, "clear_completed", handle_clear_completed)
+    hass.data[DOMAIN][entry_id] = data_instance
+    
+    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+
+    # --- NUOVO: Ascolta le modifiche alle opzioni (per aggiornare i giorni rari al volo) ---
+    entry.async_on_unload(entry.add_update_listener(update_listener))
 
     return True
+
+
+async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Scarica una Config Entry."""
+    unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    if unload_ok:
+        hass.data[DOMAIN].pop(entry.entry_id)
+    return unload_ok
+
+
+# --- NUOVO: Listener per aggiornamento opzioni ---
+async def update_listener(hass: HomeAssistant, entry: ConfigEntry):
+    """Gestisce l'aggiornamento delle opzioni."""
+    # Ricarica l'integrazione per applicare le nuove impostazioni
+    await hass.config_entries.async_reload(entry.entry_id)
 
 
 class WiseListData:
     """Classe per gestire la lista e il salvataggio su file."""
 
-    def __init__(self, hass: HomeAssistant) -> None:
+    def __init__(self, hass: HomeAssistant, filename: str) -> None:
         self.hass = hass
+        self.filename = filename
         self.items = []
 
     def fix_permissions(self):
-        path = self.hass.config.path(PERSISTENCE)
+        path = self.hass.config.path(self.filename)
         if os.path.exists(path):
             try:
                 os.chmod(path, 0o666)
@@ -154,20 +147,20 @@ class WiseListData:
 
     async def async_load(self):
         def load():
-            path = self.hass.config.path(PERSISTENCE)
+            path = self.hass.config.path(self.filename)
             if not os.path.exists(path):
                 return []
             try:
                 with open(path, "r", encoding="utf-8") as fobj:
                     return json.load(fobj)
             except (ValueError, OSError):
-                _LOGGER.error("Could not load WiseList data")
+                _LOGGER.error(f"Could not load WiseList data form {self.filename}")
                 return []
         self.items = await self.hass.async_add_executor_job(load)
 
     async def async_save(self):
         def save():
-            path = self.hass.config.path(PERSISTENCE)
+            path = self.hass.config.path(self.filename)
             try:
                 with open(path, "w", encoding="utf-8") as fobj:
                     json.dump(self.items, fobj, indent=2, ensure_ascii=False)
@@ -176,5 +169,5 @@ class WiseListData:
                 except OSError:
                     pass
             except OSError:
-                _LOGGER.error("Could not save WiseList data")
+                _LOGGER.error(f"Could not save WiseList data to {self.filename}")
         await self.hass.async_add_executor_job(save)

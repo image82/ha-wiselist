@@ -1,12 +1,10 @@
 {
   "domain": "wiselist",
   "name": "WiseList",
-  "codeowners": [],
-  "config_flow": false,
+  "config_flow": true,
   "documentation": "https://github.com/image82/ha-wiselist",
-  "iot_class": "local_polling",
   "issue_tracker": "https://github.com/image82/ha-wiselist/issues",
-  "requirements": [],
-  "version": "1.0.0"
-
+  "codeowners": ["@image82"],
+  "version": "1.3.0",
+  "requirements": []
 }
